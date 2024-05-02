@@ -15,14 +15,14 @@
 //|                                                                  |
 //+------------------------------------------------------------------+
 input double baseVolume = 0.01;       // Base Volume Size (Lot)
-input double multiplierVolume = 1.6;  // Size Multiplier
+input double multiplierVolume = 1.2;  // Size Multiplier
 input int maximumStep = 40;           // Maximum Step
 
 input double targetProfitPerLot = 0.002; // Target Profit USD/lot
 
 input double rsiOversold = 15;      // RSI M1 Oversold Threshold than
-input double deviationStep = 0.002;  // Minimum Price Deviation Step (%)
-input double multiplierStep = 1.2;  // Step Multipiler
+input double deviationStep = 0.003;  // Minimum Price Deviation Step (%)
+input double multiplierStep = 1.1;  // Step Multipiler
 
 // Variables
 int currentStep = 0;
