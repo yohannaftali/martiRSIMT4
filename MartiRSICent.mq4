@@ -5,9 +5,9 @@
 #property copyright   "Copyright 2024, Yohan Naftali"
 #property description "Martingle RSI EURUSDc"
 #property link        "https://github.com/yohannaftali"
-#property version     "240.513"
+#property version     "240.514"
 
-#define EA_MAGIC 240513
+#define EA_MAGIC 240514
 
 // Input
 
@@ -18,19 +18,21 @@ input double baseVolume = 0.01;       // Base Volume Size (Lot)
 input double multiplierVolume = 1.2;  // Size Multiplier
 input int maximumStep = 50;           // Maximum Step
 
-input double targetProfitPerLot = 0.002; // Target Profit USD/lot
+input double targetProfitPercent = 0.3; // Target Profit Percent (%)
 
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
 input double rsiOversold = 30;      // RSI(14) M1 Oversold Threshold
 input double rsiOverbought = 70;    // RSI(14) M1 Overbought Threshold
-input double deviationStep = 0.01;  // Minimum Price Deviation Step (%)
-input double multiplierStep = 0.8;  // Step Multipiler
+input double deviationStep = 0.002;  // Minimum Price Deviation Step (%)
+input double multiplierStep = 0.85;  // Step Multipiler
 
 // Variables
 double stepVolume = 0.0;
 int digitVolume = 0;
+int minVolume = 0;
+int maxVolume = 0;
 int currentStepLong = 0;
 int currentStepShort = 0;
 double minimumAskPrice = 0;
@@ -50,11 +52,11 @@ int positionLastShort = 0;
 int OnInit()
 {
   Comment("Initializing");
+  minVolume = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+  maxVolume  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
   stepVolume = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
   digitVolume = getDigit(stepVolume);
 
-  double minLot = MarketInfo(Symbol(), MODE_MINLOT);
-  double maxLot = MarketInfo(Symbol(), MODE_MAXLOT);
   datetime current = TimeCurrent();
   datetime gmt = TimeGMT();
   datetime local = TimeLocal();
@@ -62,10 +64,10 @@ int OnInit()
   Print("# ----------------------------------");
   Print("# Symbol Specification Info");
   Print("- Symbol: " + Symbol());
-  Print("- Minimum Lot: " + DoubleToString(minLot, Digits()));
-  Print("- Maximum Lot: " + DoubleToString(maxLot, Digits()));
-  Print("- step Volume: " + DoubleToString(stepVolume, digitVolume));
-  Print("- digit Volume: " + DoubleToString(digitVolume, 0));
+  Print("  > Minimum Volume: " + DoubleToString(minVolume, digitVolume));
+  Print("  > Maximum Volume: " + DoubleToString(maxVolume, digitVolume));
+  Print("  > step Volume: " + DoubleToString(stepVolume, digitVolume));
+  Print("  > digit Volume: " + IntegerToString(digitVolume));
 
   Print("# Time Info");
   Print("- Current Time: " + TimeToString(current));
@@ -88,8 +90,8 @@ int OnInit()
 void OnTick()
 {
   OnTrade();
-  double ask = MarketInfo(Symbol(), MODE_ASK);
-  double bid = MarketInfo(Symbol(), MODE_BID);
+  double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+  double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
 
   double currentRsi = iRSI(Symbol(), PERIOD_M1, 14, PRICE_CLOSE, 0);
 
@@ -99,26 +101,44 @@ void OnTick()
   if(!(isLong || isShort)) {
     return;
   }
-  Print("! -------------------------------------");
+
   if(isLong) {
-    string msgLong = "! Buy step Long #" + IntegerToString(currentStepLong+1);
-    double tpLong = NormalizeDouble(ask + (nextSumVolumeLong * targetProfitPerLot), Digits());
-    bool buy = OrderSend(Symbol(), OP_BUY, nextOpenVolumeLong, Ask, 0.0, 0.0, tpLong, msgLong, EA_MAGIC, 0, clrGreen);
-    if(!buy) {
-      Print(GetLastError());
-    }
+    orderBuy(ask);
   }
 
   if(isShort) {
-    string msgShort = "! Buy step Short #" + IntegerToString(currentStepShort+1);
-    double tpShort = NormalizeDouble(bid - (nextSumVolumeShort * targetProfitPerLot), Digits());
-    bool sell = OrderSend(Symbol(), OP_SELL, nextOpenVolumeShort, Bid, 0.0, 0.0, tpShort, msgShort, EA_MAGIC, 0, clrGreen);
-    if(!sell) {
-      Print(GetLastError());
-    }
+    orderSell(bid);
   }
 // Calculate Position
   calculatePosition();
+}
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void orderBuy(double price)
+{
+  double volume = nextOpenVolumeLong;
+  string msg = "! Open Long step #" + IntegerToString(currentStepLong+1);
+  double tp = NormalizeDouble(price + (price * targetProfitPercent/100), Digits());
+  bool order = OrderSend(Symbol(), OP_BUY, volume, Ask, 0.0, 0.0, tp, msg, EA_MAGIC, 0, clrGreen);
+  if(!order) {
+    Print(GetLastError());
+  }
+}
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void orderSell(double price)
+{
+  double volume = nextOpenVolumeShort;
+  string msg = "! Open Short step #" + IntegerToString(currentStepShort+1);
+  double tp = NormalizeDouble(price - (price * targetProfitPercent/100), Digits());
+  bool order = OrderSend(Symbol(), OP_SELL, volume, Bid, 0.0, 0.0, tp, msg, EA_MAGIC, 0, clrGreen);
+  if(!order) {
+    Print(GetLastError());
+  }
 }
 
 //+------------------------------------------------------------------+
@@ -149,24 +169,7 @@ bool openLong(double ask, double currentRsi)
     Print("! Current RSI " + DoubleToStr(currentRsi, 2));
     Print("* RSI oversold detected");
 
-    double lastOpen = Open[1];
-    double lastClose = Close[1];
-
-    if(lastClose < lastOpen) {
-      Print("! Abort open position: last bar is red");
-      return false;
-    }
-
-    double lastHigh = High[1];
-    double lastLow = Low[1];
-    double lastHead = MathAbs(lastHigh - lastClose);
-    double lastTail = MathAbs(lastOpen - lastLow);
-    double lastBody = MathAbs(lastClose - lastOpen);
-    double lastHeadOrTail = MathMax(lastHead, lastTail);
-
-    // Check if last bar green head or tail and body
-    if(lastHeadOrTail > lastBody) {
-      Print("! Last bar head or tail longer than body");
+    if(!signalReverseBull()) {
       return false;
     }
   }
@@ -202,28 +205,61 @@ bool openShort(double bid, double currentRsi)
     Print("! Current RSI " + DoubleToStr(currentRsi, 2));
     Print("* RSI overbought detected");
 
-    double lastOpen = Open[1];
-    double lastClose = Close[1];
-
-    if(lastClose > lastOpen) {
-      Print("! Abort open position: last bar is green");
-      return false;
-    }
-
-    double lastHigh = High[1];
-    double lastLow = Low[1];
-    double lastHead = MathAbs(lastHigh - lastClose);
-    double lastTail = MathAbs(lastOpen - lastLow);
-    double lastBody = MathAbs(lastClose - lastOpen);
-    double lastHeadOrTail = MathMax(lastHead, lastTail);
-
-    // Check if last bar green head or tail and body
-    if(lastHeadOrTail > lastBody) {
-      Print("! Last bar head or tail longer than body");
+    if(!signalReverseBear()) {
       return false;
     }
   }
 
+  return true;
+}
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool signalReverseBear()
+{
+  double lastOpen = Open[1];
+  double lastClose = Close[1];
+
+  if(lastClose > lastOpen) {
+    Print("! Abort open position: last bar is bullish");
+    return false;
+  }
+
+  return headTailBodyCheck(lastOpen, lastClose);
+}
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool signalReverseBull()
+{
+  double lastOpen = Open[1];
+  double lastClose = Close[1];
+
+  if(lastClose < lastOpen) {
+    Print("! Abort open position: last bar is bearish");
+    return false;
+  }
+
+  return headTailBodyCheck(lastOpen, lastClose);
+}
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool headTailBodyCheck(double lastOpen, double lastClose)
+{
+  double lastHigh = High[1];
+  double lastLow = Low[1];
+  double lastHead = MathAbs(lastHigh - lastClose);
+  double lastTail = MathAbs(lastOpen - lastLow);
+  double lastBody = MathAbs(lastClose - lastOpen);
+  double lastHeadOrTail = MathMax(lastHead, lastTail);
+  if(lastHeadOrTail > lastBody) {
+    Print("! Last bar head or tail longer than body");
+    return false;
+  }
   return true;
 }
 
@@ -357,7 +393,7 @@ void calculatePosition()
   Print("  > Next Sum Volume: " + DoubleToString(nextSumVolumeShort, digitVolume) + " lot");
 
   if(sumVolumeLong <= 0 && sumVolumeShort <= 0) {
-  Comment("No position");
+    Comment("No position");
     minimumAskPrice = 0.0;
     maximumBidPrice = 0.0;
     takeProfitPriceLong = 0.0;
@@ -368,13 +404,13 @@ void calculatePosition()
   double distancePercentageLong = (deviationStep + ((currentStepLong-1) * deviationStep * multiplierStep));
   double distancePriceLong = averagePriceLong * distancePercentageLong / 100;
   minimumAskPrice = NormalizeDouble(averagePriceLong - distancePriceLong, Digits());
-  double expectedProfitLong = targetProfitPerLot * sumVolumeLong;
+  double expectedProfitLong = targetProfitPercent * averagePriceLong / 100;
   takeProfitPriceLong = NormalizeDouble(averagePriceLong + expectedProfitLong, Digits());
 
   double distancePercentageShort = (deviationStep + ((currentStepShort-1) * deviationStep * multiplierStep));
   double distancePriceShort = averagePriceShort * distancePercentageShort / 100;
   maximumBidPrice = NormalizeDouble(averagePriceShort + distancePriceShort, Digits());
-  double expectedProfitShort = targetProfitPerLot * sumVolumeShort;
+  double expectedProfitShort = targetProfitPercent * averagePriceShort / 100;
   takeProfitPriceShort = NormalizeDouble(averagePriceShort - expectedProfitShort, Digits());
 
   Print("- Long");
@@ -404,13 +440,13 @@ void adjustTakeProfit()
   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
   if(takeProfitPriceLong < ask) {
     Print("! Warning: Current Take Profit Long < Ask: " + DoubleToString(ask, Digits()));
-    takeProfitPriceLong = NormalizeDouble(ask + (nextSumVolumeLong * targetProfitPerLot), Digits());
+    takeProfitPriceLong = NormalizeDouble(ask + (ask * targetProfitPercent / 100), Digits());
     Print("  - New Take Profit Long: " + DoubleToString(takeProfitPriceLong, Digits()));
   }
 
   if(takeProfitPriceShort > bid) {
     Print("! Warning: Current Take Profit Short > Bid: " + DoubleToString(bid, Digits()));
-    takeProfitPriceShort = NormalizeDouble(bid - (nextSumVolumeShort * targetProfitPerLot), Digits());
+    takeProfitPriceShort = NormalizeDouble(bid - (bid * targetProfitPercent / 100), Digits());
     Print("  - New Take Profit Short: " + DoubleToString(takeProfitPriceShort, Digits()));
   }
 
@@ -463,5 +499,21 @@ int getDigit(double num)
     p = MathPow(10, ++d);
   }
   return d;
+}
+//+------------------------------------------------------------------+
+double calculateVolume()
+{
+  double balance = AccountBalance();
+  double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+  double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+  double pointValue = tickValue * Point() / tickSize;
+  double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+  // double riskValue = balance * (riskPercentage / 100.0);
+  //double volumeLot = riskValue / stopLossPoint / pointValue;
+  double volumeLot = 0;
+  volumeLot = NormalizeDouble(volumeLot / lotStep, 0) * lotStep;
+  volumeLot = volumeLot > maxVolume ? maxVolume : volumeLot;
+  volumeLot = volumeLot < minVolume ? minVolume : volumeLot;
+  return volumeLot;
 }
 //+------------------------------------------------------------------+
